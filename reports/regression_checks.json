@@ -1,0 +1,9 @@
+{
+  "calculator_pro_rata": true,
+  "calculator_rejects_code": true,
+  "hierarchy_bounds_and_unique_ids": true,
+  "markdown_fenced_code_preserved": true,
+  "rrf_exact_score": true,
+  "combined_one_api_call_per_chunk": true,
+  "offline_enrichment_preserves_original": true
+}

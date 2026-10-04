@@ -148,3 +148,19 @@ K4-Track3B-Production-RAG/
   *(Ví dụ: `K4-Track3B-DAY18-NguyenVanAn-AI20K001-ProductionRAG`)*
 - **Hạn chót nộp bài:** **11h59 ngày hôm sau diễn ra bài lab (GMT+7)** trên cổng VLearn LMS / Codelab.
 - **Chi tiết yêu cầu:** Xem tại [ASSIGNMENT.md](ASSIGNMENT.md) và [RUBRIC.md](RUBRIC.md).
+
+## Kết quả - Đỗ Thanh Tùng
+
+| Metric | Naive | Production | Δ |
+|---|---:|---:|---:|
+| Faithfulness | 0.8769 | 0.8650 | -0.0119 |
+| Answer Relevancy | 0.8926 | 0.8742 | -0.0184 |
+| Context Precision | 0.8833 | 0.9250 | +0.0417 |
+| Context Recall | 0.9250 | 0.9750 | +0.0500 |
+
+- **Pipeline:** hierarchical chunking (26 parent, 104 child), BM25 + bge-m3 + RRF, rerank bằng bge-reranker-v2-m3 trên parent, enrichment một lượt gọi mỗi chunk.
+- **LLM:** sinh câu trả lời bằng `qwen/qwen3-30b-a3b-instruct-2507`, judge RAGAS là `qwen/qwen3-235b-a22b-2507`, đều qua OpenRouter.
+- **Kiểm thử:** 37/37 test pass trên Python 3.11.9. Hai PDF scan chưa OCR nên bị bỏ qua.
+- **Tài liệu:** [Failure analysis](analysis/failure_analysis.md) · [Reflection](analysis/reflections/reflection_DoThanhTung.md) · [Latency](reports/latency_report.md) · [RAGAS report](reports/ragas_report.json)
+
+Cấu hình API đặt trong `.env` (xem `.env.example`). Mọi provider tương thích OpenAI đều dùng được qua `OPENAI_BASE_URL`. Với provider không hỗ trợ `n>1` (như Gemini) thì đặt `EVAL_SUPPORTS_N=0`, và dùng `LLM_RPM`, `EVAL_RPM` để giới hạn tốc độ khi chạy free tier.

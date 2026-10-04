@@ -1,84 +1,64 @@
-"""
-Basic RAG Baseline — Chạy TRƯỚC để có scores so sánh.
-=====================================================
-Basic = paragraph chunking + dense-only search (không hybrid, không rerank, không enrichment).
-Đây là RAG đã học ở buổi trước — hôm nay sẽ cải thiện từng bước.
-"""
+"""Basic paragraph/dense-only baseline, evaluated with the same judge and prompt."""
+import json
+import sys
+import time
+from pathlib import Path
 
-import sys, os, time
+from config import LLM_MODEL, NAIVE_COLLECTION
+from src.m1_chunking import chunk_basic, load_documents
+from src.m2_search import DenseSearch
+from src.m4_eval import METRICS, evaluate_ragas, load_test_set, save_report
+from src.pipeline import generate_answer
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from src.m1_chunking import load_documents, chunk_basic
-from src.m2_search import DenseSearch
-from src.m4_eval import load_test_set, evaluate_ragas, save_report
-from config import NAIVE_COLLECTION
 
 
 def main():
-    print("=" * 60)
-    print("BASIC RAG BASELINE")
-    print("(paragraph chunking + dense-only, no rerank, no enrichment)")
-    print("=" * 60)
-
+    print("BASIC RAG BASELINE", flush=True)
+    telemetry = {"latency_ms": {}, "query_latency_ms": [], "generation_model": LLM_MODEL}
+    start = time.perf_counter()
     docs = load_documents()
-    chunks = []
-    for doc in docs:
-        for c in chunk_basic(doc["text"], metadata=doc["metadata"]):
-            chunks.append({"text": c.text, "metadata": c.metadata})
-    print(f"  {len(chunks)} basic paragraph chunks")
-
+    chunks = [{"text": c.text, "metadata": c.metadata}
+              for doc in docs for c in chunk_basic(doc["text"], metadata=doc["metadata"])]
+    telemetry.update({"documents": len(docs), "chunks": len(chunks)})
+    telemetry["latency_ms"]["chunk"] = (time.perf_counter() - start) * 1000
+    print(f"{len(chunks)} basic paragraph chunks", flush=True)
+    start = time.perf_counter()
     search = DenseSearch()
     search.index(chunks, collection=NAIVE_COLLECTION)
-
+    telemetry["latency_ms"]["index"] = (time.perf_counter() - start) * 1000
+    telemetry["qdrant_backend"] = search.backend
+    questions, answers, contexts, truths = [], [], [], []
     test_set = load_test_set()
-    questions, answers, all_contexts, ground_truths = [], [], [], []
-
-    from config import OPENAI_API_KEY
-    llm_client = None
-    if OPENAI_API_KEY:
-        from openai import OpenAI
-        llm_client = OpenAI()
-
-    for i, item in enumerate(test_set):
-        results = search.search(item["question"], top_k=3, collection=NAIVE_COLLECTION)
-        contexts = [r.text for r in results]
-
-        if llm_client and contexts:
-            try:
-                context_str = "\n\n".join(contexts)
-                resp = llm_client.chat.completions.create(model="gpt-4o-mini", messages=[
-                    {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
-                    {"role": "user", "content": f"Context:\n{context_str}\n\nCâu hỏi: {item['question']}"},
-                ])
-                answer = resp.choices[0].message.content
-            except Exception:
-                answer = contexts[0]
-        else:
-            answer = contexts[0] if contexts else "Không tìm thấy."
-
-        answers.append(answer)
+    for index, item in enumerate(test_set):
+        start = time.perf_counter()
+        found = search.search(item["question"], top_k=3, collection=NAIVE_COLLECTION)
+        context = [r.text for r in found]
+        search_ms = (time.perf_counter() - start) * 1000
+        start = time.perf_counter()
+        answer = generate_answer(item["question"], context, telemetry)
+        telemetry["query_latency_ms"].append({
+            "question": item["question"], "search": search_ms,
+            "LLM": (time.perf_counter() - start) * 1000})
         questions.append(item["question"])
-        all_contexts.append(contexts)
-        ground_truths.append(item["ground_truth"])
-        print(f"  [{i+1}/{len(test_set)}] {item['question'][:50]}...", flush=True)
-
-    results = evaluate_ragas(questions, answers, all_contexts, ground_truths)
-    print("\nBASIC BASELINE SCORES")
-    for m in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
-        print(f"  {m}: {results.get(m, 0):.4f}")
-    save_report(results, [], path="reports/naive_baseline_report.json")
-    if all(results.get(m, 0) == 0 for m in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]):
-        print("\n💡 Lưu ý: Điểm baseline hiển thị 0.00 là bình thường khi chưa hoàn thiện M2 (Dense Search) và M4 (Eval).")
-        print("   Sau khi bạn implement xong các module, hãy chạy 'python main.py' để tự động cập nhật baseline thật và so sánh.")
-    print("\nDone! Now implement advanced modules and run: python main.py")
+        answers.append(answer)
+        contexts.append(context)
+        truths.append(item["ground_truth"])
+        print(f"[{index + 1}/{len(test_set)}] {item['question']}\n  {answer}", flush=True)
+    Path("reports").mkdir(exist_ok=True)
+    Path("reports/naive_answers.json").write_text(json.dumps(
+        {"questions": questions, "answers": answers, "contexts": contexts,
+         "ground_truths": truths, "telemetry": telemetry}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    start = time.perf_counter()
+    results = evaluate_ragas(questions, answers, contexts, truths)
+    telemetry["latency_ms"]["eval"] = (time.perf_counter() - start) * 1000
+    save_report(results, [], "reports/naive_baseline_report.json", extra={"telemetry": telemetry})
+    for metric in METRICS:
+        print(f"{metric}: {results[metric]:.4f}", flush=True)
+    return results
 
 
 if __name__ == "__main__":
-    start = time.time()
     main()
-    print(f"Total: {time.time() - start:.1f}s")
